@@ -1,4 +1,5 @@
 #include "redismodule.h"
+#include "hiredis/hiredis.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -29,10 +30,10 @@ class RedisChainModule {
 
   RedisChainModule(const std::string& prev_address, const std::string& prev_port,
                    const std::string& next_address, const std::string& next_port,
-                   ChainRole chain_role)
+                   ChainRole chain_role, redisContext* child)
    : prev_address_(prev_address), prev_port_(prev_port),
      next_address_(next_address), next_port_(next_port),
-     chain_role_(chain_role), request_id_(0) {}
+     chain_role_(chain_role), request_id_(0), child_(child) {}
 
   int64_t next_request_id() {
     return request_id_++;
@@ -41,6 +42,11 @@ class RedisChainModule {
   ChainRole chain_role() {
     return chain_role_;
   }
+
+  redisContext* child() {
+    return child_;
+  }
+
  private:
   std::string prev_address_;
   std::string prev_port_;
@@ -48,6 +54,9 @@ class RedisChainModule {
   std::string next_port_;
   ChainRole chain_role_;
   int64_t request_id_;
+  // TODO(pcm): close this at shutdown
+  redisContext* child_;
+
   // for the protocol, see paper
   // std::set<int64_t> sent_;
   // for implementing flushing
@@ -71,6 +80,7 @@ std::string ReadString(RedisModuleString *str) {
 int ChainInitialize_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
   // TODO(pcm): Input checking
   REDISMODULE_NOT_USED(argc);
+  REDISMODULE_NOT_USED(ctx);
   std::string role = ReadString(argv[1]);
   RedisChainModule::ChainRole chain_role;
   if (role == "head") {
@@ -82,18 +92,29 @@ int ChainInitialize_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, 
     chain_role = RedisChainModule::ChainRole::TAIL;
   }
 
-  // TODO(pcm): Delete this at module shutdown!
-  module = new RedisChainModule(ReadString(argv[2]), ReadString(argv[3]),
-                                ReadString(argv[4]), ReadString(argv[5]),
-                                chain_role);
+  std::string prev_address = ReadString(argv[2]);
+  std::string prev_port = ReadString(argv[3]);
+  std::string next_address = ReadString(argv[4]);
+  std::string next_port = ReadString(argv[5]);
 
-  // This will set up a chain of slaves
-  if (chain_role != RedisChainModule::ChainRole::HEAD) {
-    RedisModuleCallReply *rep =
-        RedisModule_Call(ctx, "SLAVEOF", "ss", argv[2], argv[3]);
-    // TODO(pcm): Error handling
-    REDISMODULE_NOT_USED(rep);
+  struct timeval timeout = { 1, 500000 }; // 1.5 seconds
+  redisContext *c = redisConnectWithTimeout(next_address.c_str(), std::stoi(next_port), timeout);
+  if (c == NULL || c->err) {
+    if (c) {
+      printf("Connection error: %s\n", c->errstr);
+      redisFree(c);
+    } else {
+      printf("Connection error: can't allocate redis context\n");
+    }
+    exit(1);
   }
+
+  // TODO(pcm): Delete this at module shutdown!
+  module = new RedisChainModule(prev_address, prev_port,
+                                next_address, next_port,
+                                chain_role, c);
+
+  RedisModule_ReplyWithNull(ctx);
   return REDISMODULE_OK;
 }
 
@@ -105,8 +126,10 @@ int ChainPut_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int arg
   // TODO(pcm): Input checking
   REDISMODULE_NOT_USED(argc);
   long long request_id = module->next_request_id();
-  // TODO(pcm): error handling
-  RedisModule_Replicate(ctx, "DO_PUT", "ssl", argv[1], argv[2], request_id);
+  RedisModuleCallReply* reply = RedisModule_Call(ctx, "CHAIN.DO_PUT", "ssl", argv[1], argv[2], request_id);
+  // TODO(pcm): Error checking
+  REDISMODULE_NOT_USED(reply);
+  RedisModule_ReplyWithNull(ctx);
   return REDISMODULE_OK;
 }
 
@@ -124,12 +147,18 @@ int ChainDoPut_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int a
   long long request_id;
   // TODO(pcm): error checking
   RedisModule_StringToLongLong(argv[1], &request_id);
-  if (module->chain_role() != RedisChainModule::TAIL) {
+  if (module->chain_role() == RedisChainModule::TAIL) {
     // report back to client via pubsub
   } else {
-    // TODO(pcm): error checking
-    RedisModule_Replicate(ctx, "DO_PUT", "ssl", argv[1], argv[2], request_id);
+    // TODO(pcm): This is most likely slow
+    std::string key = ReadString(argv[1]);
+    std::string val = ReadString(argv[2]);
+    std::string rid = std::to_string(request_id);
+    redisReply* reply = reinterpret_cast<redisReply*>(redisCommand(module->child(), "CHAIN.DO_PUT %b %b %b", key.data(), key.size(), val.data(), val.size(), rid.data(), rid.size()));
+    assert(reply == NULL);
+    freeReplyObject(reply);
   }
+  RedisModule_ReplyWithNull(ctx);
   return REDISMODULE_OK;
 }
 
@@ -142,15 +171,15 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
       == REDISMODULE_ERR)
     return REDISMODULE_ERR;
 
-  if (RedisModule_CreateCommand(ctx,"chain.initialize",
+  if (RedisModule_CreateCommand(ctx,"CHAIN.INITIALIZE",
       ChainInitialize_RedisCommand,"write",1,1,1) == REDISMODULE_ERR)
     return REDISMODULE_ERR;
 
-  if (RedisModule_CreateCommand(ctx,"chain.put",
+  if (RedisModule_CreateCommand(ctx,"CHAIN.PUT",
       ChainPut_RedisCommand,"write",1,1,1) == REDISMODULE_ERR)
     return REDISMODULE_ERR;
 
-  if (RedisModule_CreateCommand(ctx,"chain.do_put",
+  if (RedisModule_CreateCommand(ctx,"CHAIN.DO_PUT",
       ChainDoPut_RedisCommand,"write",1,1,1) == REDISMODULE_ERR)
     return REDISMODULE_ERR;
 
