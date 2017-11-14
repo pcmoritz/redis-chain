@@ -1,5 +1,6 @@
 #include "redismodule.h"
 #include "hiredis/hiredis.h"
+#include "hiredis/async.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -30,7 +31,7 @@ class RedisChainModule {
 
   RedisChainModule(const std::string& prev_address, const std::string& prev_port,
                    const std::string& next_address, const std::string& next_port,
-                   ChainRole chain_role, redisContext* child)
+                   ChainRole chain_role, redisAsyncContext* child)
    : prev_address_(prev_address), prev_port_(prev_port),
      next_address_(next_address), next_port_(next_port),
      chain_role_(chain_role), request_id_(0), child_(child) {}
@@ -43,7 +44,7 @@ class RedisChainModule {
     return chain_role_;
   }
 
-  redisContext* child() {
+  redisAsyncContext* child() {
     return child_;
   }
 
@@ -55,7 +56,7 @@ class RedisChainModule {
   ChainRole chain_role_;
   int64_t request_id_;
   // TODO(pcm): close this at shutdown
-  redisContext* child_;
+  redisAsyncContext* child_;
 
   // for the protocol, see paper
   // std::set<int64_t> sent_;
@@ -97,12 +98,11 @@ int ChainInitialize_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, 
   std::string next_address = ReadString(argv[4]);
   std::string next_port = ReadString(argv[5]);
 
-  struct timeval timeout = { 1, 500000 }; // 1.5 seconds
-  redisContext *c = redisConnectWithTimeout(next_address.c_str(), std::stoi(next_port), timeout);
+  redisAsyncContext *c = redisAsyncConnect(next_address.c_str(), std::stoi(next_port));
   if (c == NULL || c->err) {
     if (c) {
       printf("Connection error: %s\n", c->errstr);
-      redisFree(c);
+      redisAsyncFree(c);
     } else {
       printf("Connection error: can't allocate redis context\n");
     }
@@ -154,7 +154,7 @@ int ChainDoPut_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int a
     std::string key = ReadString(argv[1]);
     std::string val = ReadString(argv[2]);
     std::string rid = std::to_string(request_id);
-    redisReply* reply = reinterpret_cast<redisReply*>(redisCommand(module->child(), "CHAIN.DO_PUT %b %b %b", key.data(), key.size(), val.data(), val.size(), rid.data(), rid.size()));
+    redisReply* reply = reinterpret_cast<redisReply*>(redisAsyncCommand(module->child(), NULL, NULL, "CHAIN.DO_PUT %b %b %b", key.data(), key.size(), val.data(), val.size(), rid.data(), rid.size()));
     // assert(reply == NULL);
     freeReplyObject(reply);
   }
