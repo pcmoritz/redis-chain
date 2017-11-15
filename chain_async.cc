@@ -15,7 +15,9 @@ extern "C" {
 #include "redis/src/ae.h"
 }
 
+#include <iostream>
 #include <string>
+#include <vector>
 
 extern "C" {
 aeEventLoop *getEventLoop();
@@ -31,6 +33,41 @@ aeEventLoop *getEventLoop();
 // redis-cli -p 6380 chain.initialize head 127.0.0.1 6379 127.0.0.1 6381
 // redis-cli -p 6381 chain.initialize head 127.0.0.1 6380 127.0.0.1 6379
 
+class RedisCommandBuilder {
+ public:
+  RedisCommandBuilder(int64_t num_args, const std::string& command) {
+    std::string prefix = "*" + std::to_string(num_args + 1) + "\r\n$" + std::to_string(command.size()) + "\r\n" + command + "\r\n";
+    std::copy(prefix.begin(), prefix.end(), std::back_inserter(command_));
+    prefix_length_ = command_.size();
+  }
+  void Reset() {
+    command_.resize(prefix_length_);
+  }
+  void AppendArg(const char* data, int64_t length) {
+    command_.push_back('$');
+    int64_t n = length;
+    do {
+      command_.push_back(n % 10 + '0');
+    } while ((n /= 10) > 0);
+    command_.push_back('\r');
+    command_.push_back('\n');
+    for (int64_t i = 0; i < length; ++i) {
+      command_.push_back(data[i]);
+    }
+    command_.push_back('\r');
+    command_.push_back('\n');
+  }
+  const char* data() {
+    return command_.data();
+  }
+  size_t size() {
+    return command_.size();
+  }
+private:
+  int64_t prefix_length_;
+  std::vector<char> command_;
+};
+
 class RedisChainModule {
  public:
 
@@ -45,7 +82,7 @@ class RedisChainModule {
                    ChainRole chain_role, redisAsyncContext* child)
    : prev_address_(prev_address), prev_port_(prev_port),
      next_address_(next_address), next_port_(next_port),
-     chain_role_(chain_role), request_id_(0), child_(child) {}
+     chain_role_(chain_role), request_id_(0), child_(child), builder_(3, "CHAIN.DO_PUT") {}
 
   int64_t next_request_id() {
     return request_id_++;
@@ -59,6 +96,10 @@ class RedisChainModule {
     return child_;
   }
 
+  RedisCommandBuilder& builder() {
+    return builder_;
+  }
+
  private:
   std::string prev_address_;
   std::string prev_port_;
@@ -66,6 +107,7 @@ class RedisChainModule {
   std::string next_port_;
   ChainRole chain_role_;
   int64_t request_id_;
+  RedisCommandBuilder builder_;
   // TODO(pcm): close this at shutdown
   redisAsyncContext* child_;
 
@@ -132,6 +174,31 @@ int ChainInitialize_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, 
   return REDISMODULE_OK;
 }
 
+int Put(RedisModuleCtx *ctx, RedisModuleString *name, RedisModuleString* data, long long request_id) {
+  RedisModuleKey *key;
+  key = reinterpret_cast<RedisModuleKey*>(RedisModule_OpenKey(ctx, name, REDISMODULE_WRITE));
+  // TODO(pcm): error checking
+  RedisModule_StringSet(key, data);
+  if (module->chain_role() == RedisChainModule::TAIL) {
+    // report back to client via pubsub
+  } else {
+    std::string key = ReadString(name);
+    std::string val = ReadString(data);
+    std::string rid = std::to_string(request_id);
+    module->builder().Reset();
+    module->builder().AppendArg(key.data(), key.size());
+    module->builder().AppendArg(val.data(), val.size());
+    module->builder().AppendArg(rid.data(), rid.size());
+    // redisReply* reply = reinterpret_cast<redisReply*>(redisAsyncCommand(module->child(), NULL, NULL, "CHAIN.DO_PUT %b %b %b", key.data(), key.size(), val.data(), val.size(), rid.data(), rid.size()));
+    // TODO(pcm): print this stuff
+    redisReply* reply = reinterpret_cast<redisReply*>(redisAsyncFormattedCommand(module->child(), NULL, NULL, module->builder().data(), module->builder().size()));
+    // assert(reply == NULL);
+    freeReplyObject(reply);
+  }
+  RedisModule_ReplyWithNull(ctx);
+  return REDISMODULE_OK;
+}
+
 // This is only called on the head node by the client
 // argv[0] is the command name
 // argv[1] is the key for the data
@@ -140,11 +207,7 @@ int ChainPut_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int arg
   // TODO(pcm): Input checking
   REDISMODULE_NOT_USED(argc);
   long long request_id = module->next_request_id();
-  RedisModuleCallReply* reply = RedisModule_Call(ctx, "CHAIN.DO_PUT", "ssl", argv[1], argv[2], request_id);
-  // TODO(pcm): Error checking
-  REDISMODULE_NOT_USED(reply);
-  RedisModule_ReplyWithNull(ctx);
-  return REDISMODULE_OK;
+  return Put(ctx, argv[1], argv[2], request_id);
 }
 
 // argv[0] is the command name
@@ -154,26 +217,9 @@ int ChainPut_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int arg
 int ChainDoPut_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
   // TODO(pcm): Input checking
   REDISMODULE_NOT_USED(argc);
-  RedisModuleKey *key;
-  key = reinterpret_cast<RedisModuleKey*>(RedisModule_OpenKey(ctx, argv[1], REDISMODULE_WRITE));
-  // TODO(pcm): error checking
-  RedisModule_StringSet(key, argv[2]);
   long long request_id;
-  // TODO(pcm): error checking
   RedisModule_StringToLongLong(argv[1], &request_id);
-  if (module->chain_role() == RedisChainModule::TAIL) {
-    // report back to client via pubsub
-  } else {
-    // TODO(pcm): This is most likely slow
-    std::string key = ReadString(argv[1]);
-    std::string val = ReadString(argv[2]);
-    std::string rid = std::to_string(request_id);
-    redisReply* reply = reinterpret_cast<redisReply*>(redisAsyncCommand(module->child(), NULL, NULL, "CHAIN.DO_PUT %b %b %b", key.data(), key.size(), val.data(), val.size(), rid.data(), rid.size()));
-    // assert(reply == NULL);
-    freeReplyObject(reply);
-  }
-  RedisModule_ReplyWithNull(ctx);
-  return REDISMODULE_OK;
+  return Put(ctx, argv[1], argv[2], request_id);
 }
 
 extern "C" {
