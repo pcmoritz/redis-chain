@@ -14,6 +14,13 @@ else()
 endif()
 
 add_library(redis_chain_async SHARED chain_async.cc)
-
 target_compile_options(redis_chain_async PUBLIC ${REDIS_MODULE_CFLAGS} -fPIC)
 target_link_libraries(redis_chain_async ${REDIS_MODULE_LDFLAGS})
+
+
+add_library(redis_chain SHARED chain.cc)
+target_compile_options(redis_chain PUBLIC ${REDIS_MODULE_CFLAGS} -fPIC)
+target_link_libraries(redis_chain ${REDIS_MODULE_LDFLAGS})
+
+add_executable(benchmark benchmark.cc)
+target_link_libraries(benchmark ${CMAKE_SOURCE_DIR}/hiredis/libhiredis.a)
