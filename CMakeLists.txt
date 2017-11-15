@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.4)
 
+include_directories(${CMAKE_SOURCE_DIR}/redis/src/)
+
 project(redis_chain)
 
 if(APPLE)
@@ -11,7 +13,7 @@ else()
   set(REDIS_MODULE_LDFLAGS -shared)
 endif()
 
-add_library(redis_chain SHARED chain.cc)
+add_library(redis_chain_async SHARED chain_async.cc)
 
-target_compile_options(redis_chain PUBLIC ${REDIS_MODULE_CFLAGS} -fPIC)
-target_link_libraries(redis_chain ${REDIS_MODULE_LDFLAGS})
+target_compile_options(redis_chain_async PUBLIC ${REDIS_MODULE_CFLAGS} -fPIC)
+target_link_libraries(redis_chain_async ${REDIS_MODULE_LDFLAGS})

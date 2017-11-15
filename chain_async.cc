@@ -1,14 +1,25 @@
-#include "redismodule.h"
-#include "hiredis/hiredis.h"
-#include "hiredis/async.h"
-
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
 
+extern "C" {
+#include "redismodule.h"
+#include "hiredis/hiredis.h"
+#include "hiredis/async.h"
+#include "hiredis/adapters/ae.h"
+}
+
+extern "C" {
+#include "redis/src/ae.h"
+}
+
 #include <string>
+
+extern "C" {
+aeEventLoop *getEventLoop();
+}
 
 // How to use this module:
 // Start 3 redis servers with
@@ -108,6 +119,9 @@ int ChainInitialize_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, 
     }
     exit(1);
   }
+
+  aeEventLoop* loop = getEventLoop();
+  redisAeAttach(loop, c);
 
   // TODO(pcm): Delete this at module shutdown!
   module = new RedisChainModule(prev_address, prev_port,
