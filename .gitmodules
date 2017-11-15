@@ -3,4 +3,4 @@
 	url = https://github.com/redis/hiredis
 [submodule "redis"]
 	path = redis
-	url = https://github.com/antirez/redis
+	url = https://github.com/pcmoritz/redis
