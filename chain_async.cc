@@ -33,41 +33,6 @@ aeEventLoop *getEventLoop();
 // redis-cli -p 6380 chain.initialize head 127.0.0.1 6379 127.0.0.1 6381
 // redis-cli -p 6381 chain.initialize head 127.0.0.1 6380 127.0.0.1 6379
 
-class RedisCommandBuilder {
- public:
-  RedisCommandBuilder(int64_t num_args, const std::string& command) {
-    std::string prefix = "*" + std::to_string(num_args + 1) + "\r\n$" + std::to_string(command.size()) + "\r\n" + command + "\r\n";
-    std::copy(prefix.begin(), prefix.end(), std::back_inserter(command_));
-    prefix_length_ = command_.size();
-  }
-  void Reset() {
-    command_.resize(prefix_length_);
-  }
-  void AppendArg(const char* data, int64_t length) {
-    command_.push_back('$');
-    int64_t n = length;
-    do {
-      command_.push_back(n % 10 + '0');
-    } while ((n /= 10) > 0);
-    command_.push_back('\r');
-    command_.push_back('\n');
-    for (int64_t i = 0; i < length; ++i) {
-      command_.push_back(data[i]);
-    }
-    command_.push_back('\r');
-    command_.push_back('\n');
-  }
-  const char* data() {
-    return command_.data();
-  }
-  size_t size() {
-    return command_.size();
-  }
-private:
-  int64_t prefix_length_;
-  std::vector<char> command_;
-};
-
 class RedisChainModule {
  public:
 
@@ -82,7 +47,7 @@ class RedisChainModule {
                    ChainRole chain_role, redisAsyncContext* child)
    : prev_address_(prev_address), prev_port_(prev_port),
      next_address_(next_address), next_port_(next_port),
-     chain_role_(chain_role), request_id_(0), child_(child), builder_(3, "CHAIN.DO_PUT") {}
+     chain_role_(chain_role), request_id_(0), child_(child) {}
 
   int64_t next_request_id() {
     return request_id_++;
@@ -96,10 +61,6 @@ class RedisChainModule {
     return child_;
   }
 
-  RedisCommandBuilder& builder() {
-    return builder_;
-  }
-
  private:
   std::string prev_address_;
   std::string prev_port_;
@@ -107,7 +68,6 @@ class RedisChainModule {
   std::string next_port_;
   ChainRole chain_role_;
   int64_t request_id_;
-  RedisCommandBuilder builder_;
   // TODO(pcm): close this at shutdown
   redisAsyncContext* child_;
 
@@ -185,14 +145,7 @@ int Put(RedisModuleCtx *ctx, RedisModuleString *name, RedisModuleString* data, l
     std::string key = ReadString(name);
     std::string val = ReadString(data);
     std::string rid = std::to_string(request_id);
-    module->builder().Reset();
-    module->builder().AppendArg(key.data(), key.size());
-    module->builder().AppendArg(val.data(), val.size());
-    module->builder().AppendArg(rid.data(), rid.size());
-    // redisReply* reply = reinterpret_cast<redisReply*>(redisAsyncCommand(module->child(), NULL, NULL, "CHAIN.DO_PUT %b %b %b", key.data(), key.size(), val.data(), val.size(), rid.data(), rid.size()));
-    // TODO(pcm): print this stuff
-    redisReply* reply = reinterpret_cast<redisReply*>(redisAsyncFormattedCommand(module->child(), NULL, NULL, module->builder().data(), module->builder().size()));
-    // assert(reply == NULL);
+    redisReply* reply = reinterpret_cast<redisReply*>(redisAsyncCommand(module->child(), NULL, NULL, "CHAIN.DO_PUT %b %b %b", key.data(), key.size(), val.data(), val.size(), rid.data(), rid.size()));
     freeReplyObject(reply);
   }
   RedisModule_ReplyWithNull(ctx);
