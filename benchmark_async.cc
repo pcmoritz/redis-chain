@@ -30,7 +30,7 @@ void Callback(redisAsyncContext* c, void* r, void* privdata) {
     return;
   }
   int64_t t = reinterpret_cast<int64_t>(privdata);
-  timestamps1.push_back(now() - t);
+  timestamps1.push_back(now() - T);
   /*
   if(timestamps1.size() == 3) {
     aeStop(loop);
@@ -45,8 +45,9 @@ void SubscriptionCallback(redisAsyncContext* c, void* r, void* privdata) {
   int64_t t = reinterpret_cast<int64_t>(privdata);
   timestamps2.push_back(now() - t);
   if (timestamps2.size() == 1) {
+    T = now();
     for (int i = 0; i < 3; ++i) {
-      redisAsyncCommand(client, Callback, reinterpret_cast<void*>(now()), "CHAIN.PUT hello world");
+      redisAsyncCommand(client, Callback, reinterpret_cast<void*>(T), "CHAIN.PUT hello world");
     }
   }
   if(timestamps2.size() == 3) {
