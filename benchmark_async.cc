@@ -43,7 +43,7 @@ void SubscriptionCallback(redisAsyncContext* c, void* r, void* privdata) {
     return;
   }
   int64_t t = reinterpret_cast<int64_t>(privdata);
-  timestamps2.push_back(now() - t);
+  timestamps2.push_back(now() - T);
   if (timestamps2.size() == 1) {
     T = now();
     for (int i = 0; i < 3; ++i) {
