@@ -139,12 +139,12 @@ int Put(RedisModuleCtx *ctx, RedisModuleString *name, RedisModuleString* data, l
   key = reinterpret_cast<RedisModuleKey*>(RedisModule_OpenKey(ctx, name, REDISMODULE_WRITE));
   // TODO(pcm): error checking
   RedisModule_StringSet(key, data);
+  std::string rid = std::to_string(request_id);
   if (module->chain_role() == RedisChainModule::TAIL) {
-    // report back to client via pubsub
+    RedisModuleCallReply *reply = RedisModule_Call(ctx, "PUBLISH", "cc", "answers", rid.c_str());
   } else {
     std::string key = ReadString(name);
     std::string val = ReadString(data);
-    std::string rid = std::to_string(request_id);
     redisReply* reply = reinterpret_cast<redisReply*>(redisAsyncCommand(module->child(), NULL, NULL, "CHAIN.DO_PUT %b %b %b", key.data(), key.size(), val.data(), val.size(), rid.data(), rid.size()));
     freeReplyObject(reply);
   }
