@@ -4,6 +4,8 @@ include_directories(${CMAKE_SOURCE_DIR}/redis/src/)
 
 project(redis_chain)
 
+set (CMAKE_CXX_STANDARD 11)
+
 if(APPLE)
   set(REDIS_MODULE_CFLAGS -W -Wall -dynamic -fno-common -g -ggdb -std=c++11 -O2)
   set(REDIS_MODULE_LDFLAGS "-undefined dynamic_lookup")

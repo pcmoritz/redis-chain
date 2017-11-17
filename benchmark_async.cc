@@ -49,14 +49,15 @@ void SubscriptionCallback(redisAsyncContext* c, void* r, void* privdata) {
 }
 
 int main() {
-  redisAsyncContext *c = redisAsyncConnect("127.0.0.1", 6379);
+  // need to set CONFIG SET protected-mode no
+  redisAsyncContext *c = redisAsyncConnect("172.31.18.230", 6379);
   if (c->err) {
     /* Let *c leak for now... */
     printf("Error: %s\n", c->errstr);
     return 1;
   }
   // IMPORTANT: need a separate context for subscribers
-  redisAsyncContext *s = redisAsyncConnect("127.0.0.1", 6381);
+  redisAsyncContext *s = redisAsyncConnect("172.31.19.175", 6379);
   if (s->err) {
     /* Let *c leak for now... */
     printf("Error: %s\n", s->errstr);
